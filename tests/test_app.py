@@ -78,6 +78,18 @@ class AltarrayTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(updated["status"], "Sent")
 
+    def test_approved_estimate_converts_to_invoice_once(self):
+        cookie = self.login("office")
+        status, _, estimate = self.request("POST", "/api/estimates", {"customer_id": 1, "description": "Heat pump replacement", "amount": 1250, "status": "Approved"}, cookie)
+        self.assertEqual(status, 201)
+        status, _, invoice = self.request("POST", f"/api/estimates/{estimate['id']}/invoice", {"due_date": "2026-12-01"}, cookie)
+        self.assertEqual(status, 201)
+        self.assertEqual(invoice["amount"], 1250)
+        self.assertEqual(invoice["due_date"], "2026-12-01")
+        status, _, duplicate = self.request("POST", f"/api/estimates/{estimate['id']}/invoice", {}, cookie)
+        self.assertEqual(status, 400)
+        self.assertIn("approved", duplicate["error"])
+
     def test_invalid_status_and_amount_rejected(self):
         cookie = self.login("admin")
         status, _, _ = self.request("POST", "/api/invoices", {"customer_id": 1, "amount": -4}, cookie)

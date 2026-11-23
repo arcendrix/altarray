@@ -1,4 +1,4 @@
-const state = { role: null, customers: [], jobs: [], estimates: [], invoices: [], view: "overview" };
+const state = { role: null, customers: [], jobs: [], estimates: [], invoices: [], view: "overview", weekOffset: 0 };
 const labels = { admin: "Administrator", dispatcher: "Dispatcher", technician: "Technician", office: "Office" };
 const canWrite = { admin: ["customers", "jobs", "estimates", "invoices"], dispatcher: ["customers", "jobs"], technician: ["jobs"], office: ["customers", "estimates", "invoices"] };
 const $ = (s) => document.querySelector(s);
@@ -20,6 +20,16 @@ async function load() {
   render();
 }
 function badge(text) { return `<span class="badge ${String(text).toLowerCase().replaceAll(" ", "-")}"><i></i>${esc(text || "Draft")}</span>`; }
+function renderWeek() {
+  const monday = new Date(); monday.setHours(0,0,0,0); monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7) + state.weekOffset * 7);
+  const days = Array.from({length:5}, (_,i) => { const d=new Date(monday); d.setDate(monday.getDate()+i); return d; });
+  const iso = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  $("#week-label").textContent = `${days[0].toLocaleDateString("en-CA",{month:"short",day:"numeric"})} – ${days[4].toLocaleDateString("en-CA",{month:"short",day:"numeric",year:"numeric"})}`;
+  const techs = [...new Set(state.jobs.map(j=>j.technician).filter(Boolean))].sort();
+  if (!techs.length) techs.push("No technicians assigned");
+  techs.push("Unassigned");
+  $("#week-grid").innerHTML = `<div class="week-cell week-corner">TEAM</div>${days.map(d=>`<div class="week-cell week-day"><b>${d.toLocaleDateString("en-CA",{weekday:"short"}).toUpperCase()}</b><span>${d.toLocaleDateString("en-CA",{month:"short",day:"numeric"})}</span></div>`).join("")}${techs.map(tech=>`<div class="week-cell week-tech"><b>${esc(tech)}</b><span>${tech==="Unassigned"?state.jobs.filter(j=>!j.technician).length:state.jobs.filter(j=>j.technician===tech).length} jobs</span></div>${days.map(d=>{const dayJobs=state.jobs.filter(j=>j.scheduled_for===iso(d)&&(tech==="Unassigned"?!j.technician:j.technician===tech));return `<div class="week-cell week-slot">${dayJobs.map(j=>`<div class="week-job ${String(j.status).toLowerCase().replaceAll(" ","-")}"><b>${esc(j.window||"Flexible")}</b><span>${esc(j.title)}</span><small>${esc(customer(j.customer_id))}</small></div>`).join("")||`<span class="slot-empty">—</span>`}</div>`}).join("")}`).join("")}`;
+}
 function render() {
   const today = new Date();
   $("#today").textContent = today.toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
@@ -34,8 +44,9 @@ function render() {
   const term = (id) => $(`#${id}`)?.value?.toLowerCase() || "";
   $("#customers-table").innerHTML = state.customers.filter(c => `${c.name} ${c.email} ${c.phone}`.toLowerCase().includes(term("customer-search"))).map(c => `<tr><td><span class="person"><span class="avatar mini">${esc(c.name.split(" ").map(x=>x[0]).slice(0,2).join(""))}</span><b>${esc(c.name)}</b></span></td><td>${esc(c.phone)}</td><td>${esc(c.email)}</td><td>${esc(c.address)}</td><td>${esc((c.created_at||"").slice(0,10))}</td></tr>`).join("") || `<tr><td colspan="5" class="empty">No customers match your search.</td></tr>`;
   $("#jobs-table").innerHTML = state.jobs.filter(j => `${j.title} ${customer(j.customer_id)} ${j.technician}`.toLowerCase().includes(term("job-search")) && (!$(`#job-filter`).value || j.status === $("#job-filter").value)).map(j => `<tr><td><b>${esc(j.title)}</b><small>JOB-${String(j.id).padStart(4,"0")}</small></td><td>${esc(customer(j.customer_id))}</td><td>${esc(j.technician || "Unassigned")}</td><td>${esc(j.scheduled_for)}<small>${esc(j.window)}</small></td><td>${badge(j.priority || "Normal")}</td><td><select class="status-select" data-status="jobs:${j.id}">${["Scheduled","In progress","Completed","Cancelled"].map(x=>`<option ${j.status===x?"selected":""}>${x}</option>`).join("")}</select></td></tr>`).join("") || `<tr><td colspan="6" class="empty">No jobs found.</td></tr>`;
-  $("#estimates-table").innerHTML = state.estimates.filter(e => `${customer(e.customer_id)} ${e.description}`.toLowerCase().includes(term("estimate-search"))).map(e => `<tr><td><b>EST-${String(e.id).padStart(4,"0")}</b></td><td>${esc(customer(e.customer_id))}</td><td>${esc(e.description)}</td><td><b>${money(e.amount)}</b></td><td>${esc(e.valid_until || "—")}</td><td><select class="status-select" data-status="estimates:${e.id}">${["Draft","Sent","Approved","Declined"].map(x=>`<option ${e.status===x?"selected":""}>${x}</option>`).join("")}</select></td></tr>`).join("") || `<tr><td colspan="6" class="empty">No estimates found.</td></tr>`;
+  $("#estimates-table").innerHTML = state.estimates.filter(e => `${customer(e.customer_id)} ${e.description}`.toLowerCase().includes(term("estimate-search"))).map(e => `<tr><td><b>EST-${String(e.id).padStart(4,"0")}</b></td><td>${esc(customer(e.customer_id))}</td><td>${esc(e.description)}</td><td><b>${money(e.amount)}</b></td><td>${esc(e.valid_until || "—")}</td><td>${state.role==="admin"||state.role==="office"?`<select class="status-select" data-status="estimates:${e.id}">${["Draft","Sent","Approved","Declined","Invoiced"].map(x=>`<option ${e.status===x?"selected":""}>${x}</option>`).join("")}</select>`:badge(e.status)}</td><td>${e.status==="Approved"&&(state.role==="admin"||state.role==="office")?`<button class="text-button" data-convert-estimate="${e.id}">Create invoice →</button>`:""}</td></tr>`).join("") || `<tr><td colspan="7" class="empty">No estimates found.</td></tr>`;
   $("#invoices-table").innerHTML = state.invoices.filter(i => `${customer(i.customer_id)} ${i.status}`.toLowerCase().includes(term("invoice-search"))).map(i => `<tr><td><b>INV-${String(i.id).padStart(4,"0")}</b></td><td>${esc(customer(i.customer_id))}</td><td>${i.job_id ? `JOB-${String(i.job_id).padStart(4,"0")}` : "—"}</td><td><b>${money(i.amount)}</b></td><td>${esc(i.due_date || "—")}</td><td>${badge(i.status)}</td><td><button class="row-menu" data-invoice-status="${i.id}" ${i.status==="Paid"?"disabled":""}>···</button></td></tr>`).join("") || `<tr><td colspan="7" class="empty">No invoices found.</td></tr>`;
+  renderWeek();
 }
 function navigate(view) {
   state.view = view;
@@ -73,4 +84,7 @@ document.addEventListener("click", async (event) => { const job = event.target.c
 ["customer-search","job-search","estimate-search","invoice-search","job-filter"].forEach(id=>document.getElementById(id).addEventListener("input",render));
 $("#logout").addEventListener("click",async()=>{await api("logout",{method:"POST"});state.role=null;$("#app").classList.add("hidden");$("#login").classList.remove("hidden");});
 document.querySelectorAll("[data-role]").forEach(button=>button.addEventListener("click",async()=>{try{const data=await api("session",{method:"POST",body:JSON.stringify({role:button.dataset.role})});state.role=data.role;setupRole();await load();}catch(e){toast(e.message,true);}}));
+$("#previous-week").addEventListener("click",()=>{state.weekOffset--;renderWeek();});
+$("#next-week").addEventListener("click",()=>{state.weekOffset++;renderWeek();});
+document.addEventListener("click",async(event)=>{const button=event.target.closest("[data-convert-estimate]");if(!button)return;button.disabled=true;try{await api(`estimates/${button.dataset.convertEstimate}/invoice`,{method:"POST",body:JSON.stringify({})});await load();navigate("invoices");toast("Invoice created from approved estimate.");}catch(e){button.disabled=false;toast(e.message,true);}});
 (async()=>{const session=await api("session");if(session.role){state.role=session.role;setupRole();await load();}else $("#login").classList.remove("hidden");})();

@@ -162,6 +162,27 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Set-Cookie", "altarray_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0")
             self.end_headers()
             return
+        if path.startswith("/api/estimates/") and path.endswith("/invoice"):
+            role = self.role()
+            if not role:
+                return self.send_json(401, {"error": "Sign in required"})
+            if "write" not in PERMISSIONS[role]["invoices"] or "write" not in PERMISSIONS[role]["estimates"]:
+                return self.send_json(403, {"error": "Your role cannot create invoices from estimates"})
+            try:
+                estimate_id = int(path.split("/")[3])
+                data = self.body()
+                with database() as db:
+                    estimate = db.execute("SELECT * FROM estimates WHERE id=?", (estimate_id,)).fetchone()
+                    if not estimate:
+                        return self.send_json(404, {"error": "Estimate not found"})
+                    if estimate["status"] != "Approved":
+                        return self.send_json(400, {"error": "Only approved estimates can become invoices"})
+                    cur = db.execute("INSERT INTO invoices(customer_id, job_id, amount, status, due_date) VALUES(?,?,?,?,?)", (estimate["customer_id"], estimate["job_id"], estimate["amount"], "Unpaid", data.get("due_date", "")))
+                    db.execute("UPDATE estimates SET status='Invoiced' WHERE id=?", (estimate_id,))
+                    invoice = db.execute("SELECT * FROM invoices WHERE id=?", (cur.lastrowid,)).fetchone()
+                return self.send_json(201, encode(invoice))
+            except (ValueError, sqlite3.IntegrityError, json.JSONDecodeError) as exc:
+                return self.send_json(400, {"error": str(exc) or "Invalid estimate"})
         pieces = path.strip("/").split("/")
         if len(pieces) != 2 or pieces[0] != "api" or pieces[1] not in FIELDS:
             return self.send_json(404, {"error": "Not found"})
@@ -227,7 +248,7 @@ class Handler(BaseHTTPRequestHandler):
             data["amount"] = round(amount, 2)
         if resource == "jobs" and data.get("status") not in (None, "Scheduled", "In progress", "Completed", "Cancelled"):
             raise ValueError("Invalid job status")
-        if resource == "estimates" and data.get("status") not in (None, "Draft", "Sent", "Approved", "Declined"):
+        if resource == "estimates" and data.get("status") not in (None, "Draft", "Sent", "Approved", "Declined", "Invoiced"):
             raise ValueError("Invalid estimate status")
         if resource == "invoices" and data.get("status") not in (None, "Unpaid", "Paid", "Overdue"):
             raise ValueError("Invalid invoice status")
