@@ -98,6 +98,33 @@ class AltarrayTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("status", data["error"])
 
+    def test_office_records_invoice_payment_once(self):
+        cookie = self.login("office")
+        status, _, invoice = self.request("POST", "/api/invoices", {"customer_id": 1, "amount": 84.5}, cookie)
+        self.assertEqual(status, 201)
+        status, _, paid = self.request("POST", f"/api/invoices/{invoice['id']}/payment", {}, cookie)
+        self.assertEqual(status, 200)
+        self.assertEqual(paid["status"], "Paid")
+        self.assertTrue(paid["paid_at"])
+        status, _, duplicate = self.request("POST", f"/api/invoices/{invoice['id']}/payment", {}, cookie)
+        self.assertEqual(status, 409)
+        self.assertIn("already paid", duplicate["error"])
+
+    def test_dispatcher_cannot_record_invoice_payment(self):
+        cookie = self.login("dispatcher")
+        status, _, data = self.request("POST", "/api/invoices/1/payment", {}, cookie)
+        self.assertEqual(status, 403)
+        self.assertIn("cannot record payments", data["error"])
+
+    def test_paid_status_requires_payment_action(self):
+        cookie = self.login("admin")
+        status, _, invoice = self.request("POST", "/api/invoices", {"customer_id": 1, "amount": 20}, cookie)
+        self.assertEqual(status, 201)
+        status, _, data = self.request("PATCH", f"/api/invoices/{invoice['id']}", {"status": "Paid"}, cookie)
+        self.assertEqual(status, 400)
+        self.assertIn("payment action", data["error"])
+
 
 if __name__ == "__main__":
     unittest.main()
+
