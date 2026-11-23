@@ -4,8 +4,8 @@ import json
 import os
 import secrets
 import sqlite3
+from datetime import datetime, timezone
 from contextlib import contextmanager
-from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -63,9 +63,12 @@ def initialize():
             id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), job_id INTEGER REFERENCES jobs(id), description TEXT NOT NULL, amount REAL NOT NULL, status TEXT NOT NULL DEFAULT 'Draft', valid_until TEXT DEFAULT '', created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS invoices (
-            id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), job_id INTEGER REFERENCES jobs(id), amount REAL NOT NULL, status TEXT NOT NULL DEFAULT 'Unpaid', due_date TEXT DEFAULT '', created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), job_id INTEGER REFERENCES jobs(id), amount REAL NOT NULL, status TEXT NOT NULL DEFAULT 'Unpaid', due_date TEXT DEFAULT '', paid_at TEXT NOT NULL DEFAULT '', created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
         """)
+        invoice_columns = {row["name"] for row in db.execute("PRAGMA table_info(invoices)")}
+        if "paid_at" not in invoice_columns:
+            db.execute("ALTER TABLE invoices ADD COLUMN paid_at TEXT NOT NULL DEFAULT ''")
         if db.execute("SELECT COUNT(*) FROM customers").fetchone()[0] == 0:
             db.execute("INSERT INTO customers(name, phone, email, address, notes) VALUES(?,?,?,?,?)", ("Morgan Lee", "(416) 555-0184", "morgan@example.test", "18 Cedar Lane, Toronto", "Prefers morning visits"))
             db.execute("INSERT INTO customers(name, phone, email, address) VALUES(?,?,?,?)", ("Jamie Chen", "(647) 555-0142", "jamie@example.test", "202 Bay Street, Toronto"))
@@ -128,6 +131,8 @@ class Handler(BaseHTTPRequestHandler):
             if "read" not in PERMISSIONS[role][resource]:
                 return self.send_json(403, {"error": "Your role cannot view this section"})
             with database() as db:
+                if resource == "invoices":
+                    db.execute("UPDATE invoices SET status='Overdue' WHERE status='Unpaid' AND due_date<>'' AND due_date < date('now')")
                 if role == "technician" and resource == "jobs":
                     rows = db.execute("SELECT * FROM jobs WHERE technician=? ORDER BY scheduled_for, window", ("Alex Rivera",)).fetchall()
                 else:
@@ -162,6 +167,27 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Set-Cookie", "altarray_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0")
             self.end_headers()
             return
+        pieces = path.strip("/").split("/")
+        if len(pieces) == 4 and pieces[:2] == ["api", "invoices"] and pieces[3] == "payment":
+            role = self.role()
+            if not role:
+                return self.send_json(401, {"error": "Sign in required"})
+            if "write" not in PERMISSIONS[role]["invoices"]:
+                return self.send_json(403, {"error": "Your role cannot record payments"})
+            try:
+                invoice_id = int(pieces[2])
+                with database() as db:
+                    invoice = db.execute("SELECT * FROM invoices WHERE id=?", (invoice_id,)).fetchone()
+                    if not invoice:
+                        return self.send_json(404, {"error": "Invoice not found"})
+                    if invoice["status"] == "Paid":
+                        return self.send_json(409, {"error": "This invoice is already paid"})
+                    paid_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    db.execute("UPDATE invoices SET status='Paid', paid_at=? WHERE id=?", (paid_at, invoice_id))
+                    updated = db.execute("SELECT * FROM invoices WHERE id=?", (invoice_id,)).fetchone()
+                return self.send_json(200, encode(updated))
+            except ValueError:
+                return self.send_json(400, {"error": "Invalid invoice id"})
         if path.startswith("/api/estimates/") and path.endswith("/invoice"):
             role = self.role()
             if not role:
@@ -220,6 +246,8 @@ class Handler(BaseHTTPRequestHandler):
             self.validate(resource, data, creating=False)
             if not data:
                 return self.send_json(400, {"error": "No supported fields provided"})
+            if resource == "invoices" and data.get("status") == "Paid":
+                return self.send_json(400, {"error": "Use the payment action to mark an invoice paid"})
             with database() as db:
                 where = "id=? AND technician=?" if role == "technician" and resource == "jobs" else "id=?"
                 params = [*data.values(), int(record_id)]
@@ -265,3 +293,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
