@@ -31,3 +31,4 @@ This is a focused starter, not a complete dispatch, accounting, messaging, payme
 ## REA reference
 
 REA was consulted only as a publicly documented inspection methodology. No ServiceTitan software, source, customer data, protected assets, or branded interface was accessed or copied. Altarray's flows and UI are independently implemented.
+
